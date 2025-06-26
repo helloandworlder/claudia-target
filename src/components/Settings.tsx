@@ -10,7 +10,12 @@ import {
   Code,
   Settings2,
   Terminal,
-  Loader2
+  Loader2,
+  Palette,
+  Check,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +31,8 @@ import {
 import { cn } from "@/lib/utils";
 import { Toast, ToastContainer } from "@/components/ui/toast";
 import { ClaudeVersionSelector } from "./ClaudeVersionSelector";
+import { themeManager, type ThemeName, type Theme, type ThemeColor, type BackgroundTheme, PRESET_COLORS, BACKGROUND_THEMES } from "@/lib/theme-manager";
+import { zoomManager, type ZoomLevel, type ZoomPreset } from "@/lib/zoom-manager";
 
 interface SettingsProps {
   /**
@@ -75,6 +82,18 @@ export const Settings: React.FC<SettingsProps> = ({
   const [currentBinaryPath, setCurrentBinaryPath] = useState<string | null>(null);
   const [selectedInstallation, setSelectedInstallation] = useState<ClaudeInstallation | null>(null);
   const [binaryPathChanged, setBinaryPathChanged] = useState(false);
+
+  // Theme state
+  const [currentTheme, setCurrentTheme] = useState<ThemeName>(themeManager.getCurrentTheme());
+  const [availableThemes] = useState<Theme[]>(themeManager.getAllThemes());
+  const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
+  const [selectedPresetColor, setSelectedPresetColor] = useState<ThemeColor>(themeManager.getCurrentCustomThemeColor());
+  const [selectedBackgroundTheme, setSelectedBackgroundTheme] = useState<BackgroundTheme>(themeManager.getCurrentCustomBackgroundTheme());
+
+  // Zoom state
+  const [currentZoom, setCurrentZoom] = useState<ZoomLevel>(zoomManager.getCurrentZoom());
+  const [zoomPresets] = useState<ZoomPreset[]>(zoomManager.getZoomPresets());
+  const [customZoom, setCustomZoom] = useState<string>(currentZoom.toString());
 
 
   // Load settings on mount
@@ -282,6 +301,68 @@ export const Settings: React.FC<SettingsProps> = ({
     setBinaryPathChanged(installation.path !== currentBinaryPath);
   };
 
+  /**
+   * Handles theme selection
+   */
+  const handleThemeChange = (themeName: ThemeName) => {
+    setCurrentTheme(themeName);
+    themeManager.setTheme(themeName);
+    
+    // Show color picker for custom theme
+    if (themeName === 'custom') {
+      setShowColorPicker(true);
+    } else {
+      setShowColorPicker(false);
+    }
+  };
+
+  /**
+   * Handles preset color selection
+   */
+  const handlePresetColorSelect = (color: ThemeColor) => {
+    setSelectedPresetColor(color);
+    themeManager.setCustomTheme(color, selectedBackgroundTheme);
+    if (currentTheme === 'custom') {
+      // Force re-render
+      setCurrentTheme('custom');
+    }
+  };
+
+  /**
+   * Handles background theme selection
+   */
+  const handleBackgroundThemeSelect = (backgroundTheme: BackgroundTheme) => {
+    setSelectedBackgroundTheme(backgroundTheme);
+    themeManager.setCustomTheme(selectedPresetColor, backgroundTheme);
+    if (currentTheme === 'custom') {
+      // Force re-render
+      setCurrentTheme('custom');
+    }
+  };
+
+  /**
+   * Handles zoom level changes
+   */
+  const handleZoomChange = (zoom: ZoomLevel) => {
+    setCurrentZoom(zoom);
+    setCustomZoom(zoom.toString());
+    zoomManager.setZoom(zoom);
+  };
+
+  /**
+   * Handles custom zoom input
+   */
+  const handleCustomZoomChange = (value: string) => {
+    setCustomZoom(value);
+    const numValue = parseInt(value, 10);
+    if (!isNaN(numValue)) {
+      const range = zoomManager.getZoomRange();
+      if (numValue >= range.min && numValue <= range.max) {
+        handleZoomChange(numValue);
+      }
+    }
+  };
+
   return (
     <div className={cn("flex flex-col h-full bg-background text-foreground", className)}>
       <div className="max-w-4xl mx-auto w-full flex flex-col h-full">
@@ -377,7 +458,238 @@ export const Settings: React.FC<SettingsProps> = ({
                 <div>
                   <h3 className="text-base font-semibold mb-4">General Settings</h3>
                   
-                  <div className="space-y-4">
+                  <div className="space-y-6">
+                    {/* Theme Selection */}
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Palette className="h-4 w-4 text-primary" />
+                        <Label className="text-sm font-medium">Application Theme</Label>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-4">
+                        Choose your preferred application theme style
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {availableThemes.map((theme) => (
+                          <div
+                            key={theme.id}
+                            onClick={() => handleThemeChange(theme.id)}
+                            className={cn(
+                              "relative p-4 rounded-lg border-2 cursor-pointer transition-all hover:shadow-md",
+                              currentTheme === theme.id 
+                                ? "border-primary bg-primary/5" 
+                                : "border-border hover:border-primary/50"
+                            )}
+                          >
+                            {/* Theme Color Preview */}
+                            <div className="flex items-start gap-3">
+                              <div className="flex gap-1">
+                                <div 
+                                  className="w-3 h-3 rounded-full" 
+                                  style={{ backgroundColor: theme.colors.background }}
+                                />
+                                <div 
+                                  className="w-3 h-3 rounded-full" 
+                                  style={{ backgroundColor: theme.colors.primary }}
+                                />
+                                <div 
+                                  className="w-3 h-3 rounded-full" 
+                                  style={{ backgroundColor: theme.colors.accent }}
+                                />
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-sm font-medium">{theme.name}</h4>
+                                  {currentTheme === theme.id && (
+                                    <Check className="h-4 w-4 text-primary" />
+                                  )}
+                                </div>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {theme.description}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Custom Theme Color Picker */}
+                      {showColorPicker && currentTheme === 'custom' && (
+                        <div className="space-y-4 p-4 border rounded-lg bg-card">
+                          <Label className="text-xs font-medium text-muted-foreground">Custom Theme Colors</Label>
+                          <p className="text-xs text-muted-foreground mb-3">
+                            Choose a color scheme and background for your custom theme
+                          </p>
+                          
+                          {/* Background Theme Selection */}
+                          <div className="space-y-2">
+                            <Label className="text-xs font-medium">Background Theme</Label>
+                            <div className="grid grid-cols-2 gap-2">
+                              {BACKGROUND_THEMES.map((bgTheme) => (
+                                <Button
+                                  key={bgTheme.key}
+                                  variant={selectedBackgroundTheme.key === bgTheme.key ? "default" : "outline"}
+                                  size="sm"
+                                  onClick={() => handleBackgroundThemeSelect(bgTheme)}
+                                  className="h-10 flex items-center gap-2"
+                                >
+                                  <div 
+                                    className="w-4 h-4 rounded border"
+                                    style={{ backgroundColor: bgTheme.background }}
+                                  />
+                                  <span className="text-xs">{bgTheme.name}</span>
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                          
+                          {/* Accent Color Selection */}
+                          <div className="space-y-2">
+                            <Label className="text-xs font-medium">Accent Color</Label>
+                            <div className="grid grid-cols-5 gap-2">
+                              {PRESET_COLORS.map((color) => (
+                                <Button
+                                  key={color.name}
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handlePresetColorSelect(color)}
+                                  className={cn(
+                                    "h-8 p-1 flex flex-col items-center justify-center border-2",
+                                    selectedPresetColor.name === color.name && "border-primary"
+                                  )}
+                                  title={color.name}
+                                >
+                                  <div className="w-4 h-4 rounded-full border border-white/20" 
+                                       style={{ backgroundColor: color.primary }} />
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                          
+                          {/* Preview */}
+                          <div className="space-y-2">
+                            <Label className="text-xs font-medium">Preview</Label>
+                            <div 
+                              className="p-3 rounded border flex items-center gap-3"
+                              style={{ 
+                                backgroundColor: selectedBackgroundTheme.background,
+                                color: selectedBackgroundTheme.foreground,
+                                borderColor: selectedBackgroundTheme.border
+                              }}
+                            >
+                              <div 
+                                className="w-3 h-3 rounded-full"
+                                style={{ backgroundColor: selectedPresetColor.primary }}
+                              />
+                              <span className="text-xs">
+                                {selectedPresetColor.name} + {selectedBackgroundTheme.name}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                                         {/* Zoom Level Settings */}
+                     <div className="space-y-4">
+                       <div className="flex items-center gap-2 mb-3">
+                         <ZoomIn className="h-4 w-4 text-primary" />
+                         <Label className="text-sm font-medium">Interface Zoom</Label>
+                       </div>
+                       <p className="text-xs text-muted-foreground mb-4">
+                         Adjust the display size of the application interface
+                       </p>
+                      
+                                             {/* Zoom Presets */}
+                       <div className="space-y-3">
+                         <Label className="text-xs font-medium text-muted-foreground">Preset Zoom Levels</Label>
+                        <div className="grid grid-cols-4 gap-2">
+                          {zoomPresets.map((preset) => (
+                            <Button
+                              key={preset.value}
+                              variant={currentZoom === preset.value ? "default" : "outline"}
+                              size="sm"
+                              onClick={() => handleZoomChange(preset.value)}
+                              className="h-8 text-xs"
+                            >
+                              {preset.label}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                      
+                                             {/* Custom Zoom Input */}
+                       <div className="space-y-2">
+                         <Label className="text-xs font-medium text-muted-foreground">Custom Zoom (50% - 300%)</Label>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 flex-shrink-0"
+                            onClick={() => handleZoomChange(Math.max(50, currentZoom - 10))}
+                            disabled={currentZoom <= 50}
+                          >
+                            <ZoomOut className="h-3 w-3" />
+                          </Button>
+                          
+                          <div className="flex-1 relative">
+                            <Input
+                              type="number"
+                              min="50"
+                              max="300"
+                              step="10"
+                              value={customZoom}
+                              onChange={(e) => handleCustomZoomChange(e.target.value)}
+                              className="h-8 text-center pr-8"
+                            />
+                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                              %
+                            </span>
+                          </div>
+                          
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 flex-shrink-0"
+                            onClick={() => handleZoomChange(Math.min(300, currentZoom + 10))}
+                            disabled={currentZoom >= 300}
+                          >
+                            <ZoomIn className="h-3 w-3" />
+                          </Button>
+                          
+                                                     <Button
+                             variant="outline"
+                             size="icon"
+                             className="h-8 w-8 flex-shrink-0"
+                             onClick={() => handleZoomChange(100)}
+                             title="Reset to 100%"
+                           >
+                             <RotateCcw className="h-3 w-3" />
+                           </Button>
+                        </div>
+                        
+                        {/* Zoom Slider */}
+                        <div className="px-1">
+                          <input
+                            type="range"
+                            min="50"
+                            max="300"
+                            step="10"
+                            value={currentZoom}
+                            onChange={(e) => handleZoomChange(parseInt(e.target.value))}
+                            className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer"
+                            style={{
+                              background: `linear-gradient(to right, var(--color-primary) 0%, var(--color-primary) ${((currentZoom - 50) / 250) * 100}%, var(--color-muted) ${((currentZoom - 50) / 250) * 100}%, var(--color-muted) 100%)`
+                            }}
+                          />
+                          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                            <span>50%</span>
+                            <span className="font-medium text-foreground">{currentZoom}%</span>
+                            <span>300%</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
                     {/* Include Co-authored By */}
                     <div className="flex items-center justify-between">
                       <div className="space-y-0.5 flex-1">

@@ -25,3 +25,41 @@ dist-ssr
 temp_lib/
 
 .cursor/
+
+# 开发者敏感信息和构建相关文件 (CRITICAL: Contains personal info!)
+# Apple Developer certificates and keys
+*.cer
+*.p12
+*.mobileprovision
+*.provisionprofile
+
+# Build scripts with embedded credentials
+build-notarized.sh
+build-multi-arch.sh
+
+# Distribution files and builds
+dist-files/
+src-tauri/target/
+*.dmg
+*.app
+*.deb
+*.rpm
+
+# User installation guides (may contain personal info)
+用户安装指南.md
+*安装指南*
+
+# Apple signing and notarization files
+apple-credentials.sh
+entitlements.plist
+*.xcarchive
+
+# Environment files that might contain secrets
+.env.local
+.env.production
+.env.development
+*.env
+
+# Configuration files with real developer info
+src-tauri/tauri.conf.json
+# Keep only the example version in repo
