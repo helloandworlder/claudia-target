@@ -32,6 +32,9 @@ temp_lib/
 *.p12
 *.mobileprovision
 *.provisionprofile
+develop_id_application.p12
+developer_id_application.p12
+certificate.p12
 
 # Build scripts with embedded credentials
 build-notarized.sh
