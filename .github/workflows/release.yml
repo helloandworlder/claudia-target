@@ -9,26 +9,23 @@ on:
       tag:
         description: 'Tag version (e.g., v1.0.0)'
         required: true
-        default: 'v0.1.0'
+        default: 'v0.1.1'
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  build-macos:
+  build-individual:
     strategy:
       matrix:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact_name: Claudia_aarch64.dmg
+            artifact_name: Claudia_aarch64
           - target: x86_64-apple-darwin  
             os: macos-latest
-            artifact_name: Claudia_x86_64.dmg
-          - target: universal-apple-darwin
-            os: macos-latest
-            artifact_name: Claudia_universal.dmg
+            artifact_name: Claudia_x86_64
     
     runs-on: ${{ matrix.os }}
     
@@ -52,12 +49,6 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Add additional Rust targets for universal build
-        if: matrix.target == 'universal-apple-darwin'
-        run: |
-          rustup target add aarch64-apple-darwin
-          rustup target add x86_64-apple-darwin
-
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version ^2
 
@@ -79,10 +70,6 @@ jobs:
 
       - name: Build Tauri app
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -90,7 +77,7 @@ jobs:
         run: |
           bun tauri build --target ${{ matrix.target }}
 
-      - name: Locate DMG file
+      - name: Locate and rename DMG
         id: locate_dmg
         run: |
           DMG_PATH=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
@@ -98,30 +85,130 @@ jobs:
             echo "❌ DMG file not found"
             exit 1
           fi
-          echo "dmg_path=$DMG_PATH" >> $GITHUB_OUTPUT
-          echo "✅ Found DMG: $DMG_PATH"
-
-      - name: Rename DMG for release
-        run: |
           VERSION=${GITHUB_REF#refs/tags/}
           NEW_NAME="Claudia_${VERSION}_${{ matrix.target }}.dmg"
-          cp "${{ steps.locate_dmg.outputs.dmg_path }}" "$NEW_NAME"
-          echo "RELEASE_DMG=$NEW_NAME" >> $GITHUB_ENV
+          cp "$DMG_PATH" "$NEW_NAME"
+          echo "dmg_path=$NEW_NAME" >> $GITHUB_OUTPUT
+          echo "✅ Created: $NEW_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ env.RELEASE_DMG }}
+          path: ${{ steps.locate_dmg.outputs.dmg_path }}
+
+  build-universal:
+    needs: build-individual
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version ^2
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+          security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+          rm certificate.p12
+
+      - name: Build Universal Binary
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Build both architectures
+          echo "🔨 Building ARM64..."
+          bun tauri build --target aarch64-apple-darwin
+          
+          echo "🔨 Building x86_64..."
+          bun tauri build --target x86_64-apple-darwin
+          
+          # Find the binary inside the .app bundle
+          APP_NAME="Claudia"
+          ARM64_APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/${APP_NAME}.app"
+          X86_64_APP="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/${APP_NAME}.app"
+          
+          # Create universal app bundle
+          UNIVERSAL_APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/${APP_NAME}.app"
+          mkdir -p "$(dirname "$UNIVERSAL_APP")"
+          cp -R "$ARM64_APP" "$UNIVERSAL_APP"
+          
+          # Create universal binary using lipo
+          lipo -create \
+            "${ARM64_APP}/Contents/MacOS/${APP_NAME}" \
+            "${X86_64_APP}/Contents/MacOS/${APP_NAME}" \
+            -output "${UNIVERSAL_APP}/Contents/MacOS/${APP_NAME}"
+          
+          echo "✅ Universal binary created"
+          file "${UNIVERSAL_APP}/Contents/MacOS/${APP_NAME}"
+
+      - name: Create Universal DMG
+        run: |
+          # Use Tauri's bundler to create DMG from universal app
+          APP_NAME="Claudia"
+          UNIVERSAL_APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/${APP_NAME}.app"
+          VERSION=${GITHUB_REF#refs/tags/}
+          DMG_NAME="Claudia_${VERSION}_universal-apple-darwin.dmg"
+          
+          # Create temporary directory for DMG creation
+          mkdir -p dmg_temp
+          cp -R "$UNIVERSAL_APP" dmg_temp/
+          
+          # Create DMG
+          hdiutil create -volname "$APP_NAME" -srcfolder dmg_temp -ov -format UDZO "$DMG_NAME"
+          
+          echo "✅ Universal DMG created: $DMG_NAME"
+
+      - name: Upload Universal DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Claudia_universal
+          path: Claudia_*_universal-apple-darwin.dmg
 
   release:
-    needs: build-macos
+    needs: [build-individual, build-universal]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+
+      - name: List artifacts
+        run: |
+          echo "📦 Downloaded artifacts:"
+          find . -name "*.dmg" -type f -exec ls -lh {} \;
 
       - name: Create Release
         id: create_release
@@ -132,29 +219,36 @@ jobs:
           tag_name: ${{ github.ref }}
           release_name: Release ${{ github.ref }}
           body: |
-            ## Claudia Release ${{ github.ref }}
+            ## 🚀 Claudia Release ${{ github.ref }}
             
-            ### 📦 下载链接
+            ### 📦 下载选项
             
-            - **ARM64 (Apple Silicon)**: 适用于M1/M2/M3/M4 Mac
-            - **x86_64 (Intel)**: 适用于Intel Mac 
-            - **Universal**: 适用于所有Mac（推荐）
+            - **🔥 Universal Binary** (推荐): 兼容所有Mac (Intel + Apple Silicon)
+            - **⚡ ARM64**: 专为Apple Silicon优化 (M1/M2/M3/M4)
+            - **🔧 x86_64**: 适用于Intel Mac
             
-            ### 🔧 安装说明
+            ### 🛠 安装步骤
             
-            1. 下载对应架构的DMG文件
-            2. 双击打开DMG文件
-            3. 将Claudia拖入Applications文件夹
-            4. 首次运行可能需要在系统偏好设置中允许运行
+            1. 下载对应的DMG文件
+            2. 双击DMG文件打开
+            3. 将Claudia.app拖入Applications文件夹
+            4. 首次启动时，如遇安全提示：
+               - 系统偏好设置 → 安全性与隐私 → 允许运行
             
-            ### ✨ 新功能和改进
+            ### ✨ 特性
             
-            - 代码签名和公证支持
-            - 多架构构建支持
-            - 改进的用户界面
+            - ✅ 完整代码签名和公证
+            - ✅ 支持Apple Silicon和Intel处理器
+            - ✅ 优化的性能和稳定性
+            - ✅ 自动更新支持
+            
+            ### 🔍 验证签名
+            ```bash
+            spctl -a -t exec -vv /Applications/Claudia.app
+            ```
             
             ---
-            Built with ❤️ using Tauri + React + TypeScript
+            💝 Built with Tauri + React + TypeScript
           draft: false
           prerelease: false
 
@@ -164,8 +258,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./Claudia_aarch64.dmg/Claudia_${{ github.ref }}_aarch64-apple-darwin.dmg
-          asset_name: Claudia_${{ github.ref }}_aarch64-apple-darwin.dmg
+          asset_path: ./Claudia_aarch64/Claudia_${{ github.ref_name }}_aarch64-apple-darwin.dmg
+          asset_name: Claudia_${{ github.ref_name }}_aarch64-apple-darwin.dmg
           asset_content_type: application/octet-stream
 
       - name: Upload x86_64 DMG
@@ -174,8 +268,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./Claudia_x86_64.dmg/Claudia_${{ github.ref }}_x86_64-apple-darwin.dmg
-          asset_name: Claudia_${{ github.ref }}_x86_64-apple-darwin.dmg
+          asset_path: ./Claudia_x86_64/Claudia_${{ github.ref_name }}_x86_64-apple-darwin.dmg
+          asset_name: Claudia_${{ github.ref_name }}_x86_64-apple-darwin.dmg
           asset_content_type: application/octet-stream
 
       - name: Upload Universal DMG
@@ -184,6 +278,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./Claudia_universal.dmg/Claudia_${{ github.ref }}_universal-apple-darwin.dmg
-          asset_name: Claudia_${{ github.ref }}_universal-apple-darwin.dmg
+          asset_path: ./Claudia_universal/Claudia_${{ github.ref_name }}_universal-apple-darwin.dmg
+          asset_name: Claudia_${{ github.ref_name }}_universal-apple-darwin.dmg
           asset_content_type: application/octet-stream 
